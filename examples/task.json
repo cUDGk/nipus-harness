@@ -1,0 +1,12 @@
+{
+  "id": "example",
+  "goal": "Update the application and run the checks.",
+  "workspace": "C:\\path\\to\\workspace",
+  "model": "gpt-6.1-terra",
+  "effort": "medium",
+  "read_roots": [],
+  "max_quota_percent": 1.0,
+  "acceptance": [
+    { "id": "tests", "command": "npm test", "timeout_s": 120 }
+  ]
+}

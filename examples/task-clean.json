@@ -1,0 +1,13 @@
+{
+  "id": "clean-example",
+  "goal": "Work only from the spec in this repository. Make the tests pass.",
+  "workspace": "C:\\path\\to\\clean-copy",
+  "model": "gpt-6.1-terra",
+  "effort": "medium",
+  "max_quota_percent": 1.0,
+  "forbidden_terms_file": "C:\\path\\to\\denylist.txt",
+  "clean_room": { "manifest": "C:\\path\\to\\manifest.json" },
+  "acceptance": [
+    { "id": "tests", "command": "dotnet test", "timeout_s": 600 }
+  ]
+}

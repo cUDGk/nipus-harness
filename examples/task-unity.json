@@ -1,0 +1,23 @@
+{
+  "id": "unity-example",
+  "goal": "Fix the failing tool and make its tests pass.",
+  "workspace": "C:\\path\\to\\worktree",
+  "model": "gpt-6.1-terra",
+  "effort": "medium",
+  "box": "none",
+  "max_quota_percent": 1.0,
+  "host_jobs": {
+    "unity-tests": {
+      "command": ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\path\\to\\run_tests.ps1",
+        "-Repo", "{workspace}", "-Entry", "{entry}", "-Log", "{log}"],
+      "args": { "entry": "[A-Za-z][A-Za-z0-9.]*" },
+      "timeout_s": 3600,
+      "unity_project": "C:\\path\\to\\UnityLab",
+      "output": "tail"
+    }
+  },
+  "acceptance": [
+    { "id": "unity", "host_job": "unity-tests", "args": { "entry": "Tests.RunAll" } }
+  ],
+  "scope": { "protected": ["Tests/Expected/**"] }
+}

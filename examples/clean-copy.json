@@ -1,0 +1,9 @@
+{
+  "id": "clean-example",
+  "source": "C:\\path\\to\\repository",
+  "commit": "0000000000000000000000000000000000000000",
+  "include": ["src/**", "tests/**", "spec.md"],
+  "exclude": ["logs/**"],
+  "dest": "C:\\path\\to\\clean-copy",
+  "terms_file": "C:\\path\\to\\denylist.txt"
+}

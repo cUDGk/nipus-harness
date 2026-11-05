@@ -1,0 +1,7 @@
+node_modules/
+.tools/
+.test-tmp/
+runs/
+__pycache__/
+# Holds the login tokens. Never commit.
+.agent/

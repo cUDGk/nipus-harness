@@ -1,0 +1,12 @@
+{
+  "id": "example-mcp",
+  "goal": "Use the declared tools to inspect the application.",
+  "workspace": "C:\\path\\to\\workspace",
+  "model": "gpt-6.1-terra",
+  "effort": "medium",
+  "read_roots": [],
+  "max_quota_percent": 1,
+  "mcp": {
+    "desktop": { "command": ["C:\\path\\to\\mcp-server.exe"], "tools": ["screenshot"], "lock": "desktop" }
+  }
+}

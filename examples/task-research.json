@@ -1,0 +1,13 @@
+{
+  "id": "research-example",
+  "goal": "Find out what the question asks. Do not change any files.",
+  "workspace": "C:\\path\\to\\empty-repo",
+  "model": "gpt-6.1-terra",
+  "effort": "medium",
+  "max_quota_percent": 0.2,
+  "web": { "search_url": "http://search-server:8888", "max_requests": 30 },
+  "questions": [
+    { "id": "answer", "text": "The question to answer, with what would count as an answer.", "sources": 2 }
+  ],
+  "scope": { "allow": [] }
+}
