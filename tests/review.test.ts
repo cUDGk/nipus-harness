@@ -16,7 +16,7 @@ import { readTerms, scanValue } from '../src/scan.ts';
 import { runPowerShell } from '../src/box.ts';
 import { activity, createTools } from '../src/tools.ts';
 import { reap } from '../src/commands.ts';
-import { audit } from '../src/clean.ts';
+import { audit, hash } from '../src/clean.ts';
 
 const repository = (work: string) => {
   execFileSync('git', ['init', '-q', work]);
@@ -456,7 +456,8 @@ test('a term in the header of a data string and a gap in the copies are both fou
   writeFileSync(path.join(root, 'task.json'), JSON.stringify({ clean_room: {}, forbidden_terms_file: termsFile,
     read_roots: [], box: 'mxc' }));
   const ledger = path.join(root, 'ledger.jsonl');
-  writeFileSync(ledger, JSON.stringify({ clean_room: { manifest_sha256: 'test' } }) + '\n');
+  writeFileSync(ledger, JSON.stringify({ clean_room: { manifest_sha256: 'test',
+    terms_file_sha256: hash(readFileSync(termsFile)) } }) + '\n');
   const restore = installGate({ cleanRoom: true, allowedHosts: ['localhost:1234'], model: 'test', effort: 'medium',
     tools: [], ledgerPath: ledger, maxQuotaPercent: 1 });
   try {
@@ -601,15 +602,18 @@ test('more replies than requests fails the audit', async () => {
   const termsFile = path.join(root, 'terms'); writeFileSync(termsFile, 'forbidden-word-alpha\n');
   writeFileSync(path.join(root, 'task.json'), JSON.stringify({ clean_room: {}, forbidden_terms_file: termsFile,
     read_roots: [], box: 'mxc' }));
-  writeFileSync(path.join(root, 'ledger.jsonl'), JSON.stringify({ clean_room: { manifest_sha256: 'test' } }) + '\n' +
+  writeFileSync(path.join(root, 'ledger.jsonl'), JSON.stringify({ clean_room: { manifest_sha256: 'test',
+    terms_file_sha256: hash(readFileSync(termsFile)) } }) + '\n' +
     JSON.stringify({ usage: { input: 1, cached: 0, output: 1, reasoning: 0 } }) + '\n');
   try { assert.deepEqual(audit(root).mismatch, ['more replies than requests']); }
   finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('the examples are valid tasks and declarations', () => {
-  const run = (...args: string[]) => JSON.parse(execFileSync(process.execPath, [path.resolve('src/cli.ts'), ...args],
-    { encoding: 'utf8' }));
+  const run = (...args: string[]) => {
+    const child = spawnSync(process.execPath, [path.resolve('src/cli.ts'), ...args], { encoding: 'utf8' });
+    assert.equal(child.status, 1); return JSON.parse(child.stdout);
+  };
   for (const name of ['task.json', 'task-unity.json', 'task-research.json', 'task-clean.json', 'task-mcp.json']) {
     // Validation comes first, so reaching the missing workspace means every key and shape was accepted.
     assert.equal(run('run', path.resolve('examples', name)).reason, 'Workspace does not exist', name);

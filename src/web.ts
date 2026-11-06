@@ -61,7 +61,7 @@ function safeLookup(options: Options): Lookup {
 }
 function request(url: URL, timeout: number, lookup?: Lookup) {
   return new Promise<http.IncomingMessage>((resolve, reject) => {
-    const req = (url.protocol === 'https:' ? https : http).get(url, { lookup,
+    const req = (url.protocol === 'https:' ? https : http).get(url, { lookup, agent: false,
       headers: { 'user-agent': 'Nipus-harness/1.0', 'accept-encoding': 'gzip, deflate, br' } }, resolve);
     const timer = setTimeout(() => req.destroy(new Error('timeout')), timeout);
     // Node closes the socket without a response on a 101 reply, so a close must end the wait as well.

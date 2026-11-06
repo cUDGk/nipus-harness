@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import http from 'node:http';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createTools } from '../src/tools.ts';
 import { BudgetExhausted, GateBlocked, installGate } from '../src/gate.ts';
@@ -51,8 +51,9 @@ async function scenario(steps: ScriptStep[], overrides: Record<string, unknown> 
     const child = spawn(process.execPath, [...(preload ? ['--import', pathToFileURL(path.resolve('tests/ledger-failure.mjs')).href] : []), path.resolve('src/cli.ts'), 'run', taskFile], { cwd: root, env: { ...process.env, HARNESS_AGENT_DIR: agent, HARNESS_TEST_API_KEY: 'fake-test-key' }, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = ''; let stderr = ''; child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
     const code = await new Promise<number | null>(resolve => child.on('close', resolve));
-    assert.equal(code, 0, stderr); assert.equal(stdout.trim().split('\n').length, 1);
+    assert.equal(stdout.trim().split('\n').length, 1);
     const value = JSON.parse(stdout); runDir = value.run_dir;
+    assert.equal(code, value.status === 'completed' ? 0 : 1, stderr);
     let ledger: Array<Record<string, any>> = [];
     if (runDir) { try { ledger = readFileSync(path.join(runDir, 'ledger.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch { /* No ledger on startup failure. */ } }
     return { value, requests, ledger, times, root, terms, stderr, markerExists: existsSync(path.join(root, 'marker')) };
@@ -138,8 +139,9 @@ test('resume restores conversation and cumulative usage after budget exhaustion'
     const child = spawn(process.execPath, [path.resolve('src/cli.ts'), ...args], { env: { ...process.env,
       HARNESS_AGENT_DIR: agent, HARNESS_TEST_API_KEY: 'fake-test-key', HARNESS_QUOTA_COMMAND: '' } });
     let stdout = ''; let stderr = ''; child.stdout.on('data', c => stdout += c); child.stderr.on('data', c => stderr += c);
-    assert.equal(await new Promise(resolve => child.on('close', resolve)), 0, stderr);
-    return JSON.parse(stdout);
+    const code = await new Promise(resolve => child.on('close', resolve));
+    const result = JSON.parse(stdout); assert.equal(code, result.status === 'completed' ? 0 : 1, stderr);
+    return result;
   };
   try {
     const first = await cli(['run', task]); runDir = first.run_dir;
@@ -170,14 +172,25 @@ test('resume restores conversation and cumulative usage after budget exhaustion'
     // The caller may judge a block invalid and continue the run.
     const resultFile = path.join(killedDir, 'result.json');
     writeFileSync(resultFile, JSON.stringify({ ...JSON.parse(readFileSync(resultFile, 'utf8')), status: 'blocked' }));
-    const unblocked = await cli(['resume', killedDir]);
+    const note = path.join(root, 'note.txt'); writeFileSync(note, 'caller-answer-canary\n');
+    const unblocked = await cli(['resume', killedDir, '--message-file', note]);
     assert.equal(unblocked.status, 'completed', JSON.stringify(unblocked));
+    assert.match(JSON.stringify(requests.at(-1)), /caller-answer-canary/);
+    writeFileSync(resultFile, JSON.stringify({ ...JSON.parse(readFileSync(resultFile, 'utf8')), status: 'blocked' }));
+    const badOption = await cli(['resume', killedDir, '--message-file']);
+    assert.equal(badOption.status, 'failed'); assert.match(badOption.reason, /Invalid resume arguments/);
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
     if (runDir) rmSync(runDir, { recursive: true, force: true });
     if (killedDir) rmSync(killedDir, { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('missing task returns failed JSON and exit code 1', () => {
+  const child = spawnSync(process.execPath, [path.resolve('src/cli.ts'), 'run',
+    path.join(os.tmpdir(), `missing-task-${process.pid}.json`)], { encoding: 'utf8' });
+  assert.equal(child.status, 1); assert.equal(JSON.parse(child.stdout).status, 'failed');
 });
 
 test('G1 G2 G3 CLI failures and controls', async () => {
@@ -193,6 +206,19 @@ test('invalid task fields fail before a model request', async () => {
     { acceptance: [{ id: 'check', command: 'echo ok', timeout_s: '30' }] }]) {
     const value = await scenario([finishStep], overrides);
     assert.equal(value.value.status, 'failed'); assert.ok(value.value.reason); assert.equal(value.requests.length, 0);
+  }
+  // Each of these would start a run if the nested field went unchecked, so the reason names the check that caught it.
+  for (const [overrides, reason] of [[{ scope: { proteted: [] } }, 'Invalid scope'],
+    [{ scope: { allow: 'x' } }, 'Invalid scope'],
+    [{ roles: { worker: { model: 'gpt-6.1-terra', effort: 'low', tools: ['finish'], max_quota_percent: 1,
+      extra: true } } }, 'Invalid role'],
+    [{ questions: [{ id: 'a', text: 'x', extra: 1 }] }, 'Invalid questions'],
+    [{ questions: [{ id: 'a', text: 'x' }, { id: 'a', text: 'y' }] }, 'Invalid questions'],
+    [{ max_continues: -1 }, 'Invalid max_continues'], [{ max_continues: '3' }, 'Invalid max_continues'],
+    [{ read_roots: ['relative'] }, 'Invalid read_roots']] as const) {
+    const value = await scenario([finishStep], overrides);
+    assert.equal(value.value.status, 'failed'); assert.equal(value.value.reason, reason, JSON.stringify(overrides));
+    assert.equal(value.requests.length, 0);
   }
   const control = await scenario([finishStep]);
   assert.equal(control.value.status, 'completed'); assert.equal(control.requests.length, 1);
@@ -542,7 +568,7 @@ test('CLI talks to a local Responses server without finish', async () => {
     let stdout = ''; let stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
     const code = await new Promise<number | null>(resolve => child.on('close', resolve));
-    assert.equal(code, 0, stderr);
+    assert.equal(code, 1, stderr);
     assert.equal(stdout.trim().split('\n').length, 1);
     const value = JSON.parse(stdout);
     runDir = value.run_dir;

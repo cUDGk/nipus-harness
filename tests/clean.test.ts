@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readTerms, scanBytes, scanText } from '../src/scan.ts';
 import { cleanCopy, audit, exportPatch, hash, scanDiff, verifyClean } from '../src/clean.ts';
 import { installGate, roleContext } from '../src/gate.ts';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import path from 'node:path';
@@ -87,15 +87,23 @@ test('copy reads only the selected tree and quarantines current content', async 
     writeFileSync(taskFile, JSON.stringify({ ...task, id: 'clean-test', goal: 'ordinary task',
       model: 'gpt-6.1-terra', effort: 'medium', max_quota_percent: 10, base_url: 'http://localhost:1234/v1',
       roles: { worker: { model: 'gpt-6.1-terra', effort: 'low', tools: ['finish'], max_quota_percent: 10 } } }));
-    const runCli = (args = ['run', taskFile], extra: Record<string, string> = {}) => JSON.parse(execFileSync(
-      process.execPath, ['--import', pathToFileURL(preloadFile).href, path.resolve('src/cli.ts'), ...args],
-      { encoding: 'utf8',
-        env: { ...process.env, HARNESS_AGENT_DIR: agent, HARNESS_TEST_API_KEY: 'fake-test-key',
-          HARNESS_QUOTA_COMMAND: '', HARNESS_RETRY_BASE_MS: '10', CLEAN_TEST_COUNT: requestCount, ...extra } }));
+    const runCli = (args = ['run', taskFile], extra: Record<string, string> = {}) => {
+      const child = spawnSync(process.execPath,
+        ['--import', pathToFileURL(preloadFile).href, path.resolve('src/cli.ts'), ...args],
+        { encoding: 'utf8', env: { ...process.env, HARNESS_AGENT_DIR: agent, HARNESS_TEST_API_KEY: 'fake-test-key',
+          HARNESS_QUOTA_COMMAND: '', HARNESS_RETRY_BASE_MS: '10', CLEAN_TEST_COUNT: requestCount, ...extra } });
+      const value = JSON.parse(child.stdout); assert.equal(child.status, value.status === 'completed' ? 0 : 1);
+      return value;
+    };
     const completed = runCli();
     try {
       assert.equal(completed.status, 'completed', JSON.stringify(completed));
       assert.equal(readFileSync(requestCount, 'utf8'), 'xxxx');
+      assert.equal(audit(completed.run_dir).ok, true);
+      writeFileSync(terms, 'changed-word\n');
+      assert.equal(audit(completed.run_dir).ok, false);
+      assert.ok(audit(completed.run_dir).mismatch.includes('terms_file'));
+      writeFileSync(terms, 'forbidden-word-alpha\n');
       assert.equal(audit(completed.run_dir).ok, true);
       assert.equal(readdirSync(path.join(completed.run_dir, 'requests')).length, 4);
     } finally { if (completed.run_dir) rmSync(completed.run_dir, { recursive: true, force: true }); }
@@ -161,8 +169,11 @@ test('copy reads only the selected tree and quarantines current content', async 
     const readRoot = path.join(root, 'read-root'); mkdirSync(readRoot);
     const large = path.join(readRoot, 'large'); writeFileSync(large, 'safe');
     fs.truncateSync(large, 64 * 1024 * 1024 + 1);
-    const withLarge = await verifyClean({ ...task, read_roots: [readRoot] }, run);
-    assert.ok(withLarge.large.includes(large)); rmSync(large);
+    await verifyClean({ ...task, read_roots: [readRoot] }, run);
+    const fd = fs.openSync(large, 'r+');
+    fs.writeSync(fd, Buffer.from('forbidden-word-alpha'), 0, 20, 64 * 1024 * 1024); fs.closeSync(fd);
+    await assert.rejects(verifyClean({ ...task, read_roots: [readRoot] }, run), /forbidden term/);
+    assertBlocked({ read_roots: [readRoot] }); rmSync(large);
     writeFileSync(path.join(readRoot, 'data'), 'forbidden-word-alpha');
     await assert.rejects(verifyClean({ ...task, read_roots: [readRoot] }, run), /forbidden term/);
     assertBlocked({ read_roots: [readRoot] });
@@ -270,7 +281,7 @@ test('request receipts and audit detect tampering and extra files', async () => 
     writeFileSync(path.join(root, 'task.json'), JSON.stringify({ clean_room: {}, forbidden_terms_file: terms,
       read_roots: [], box: 'mxc' }));
     const ledger = path.join(root, 'ledger.jsonl');
-    writeFileSync(ledger, JSON.stringify({ clean_room: { manifest_sha256: 'test' } }) + '\n');
+    writeFileSync(ledger, JSON.stringify({ clean_room: { manifest_sha256: 'test', terms_file_sha256: hash(readFileSync(terms)) } }) + '\n');
     let received = 0; globalThis.fetch = async () => { received++; return new Response('ok'); };
     const restore = installGate({ cleanRoom: true, allowedHosts: ['localhost:1234'], model: 'test',
       effort: 'medium', tools: [], ledgerPath: ledger, maxQuotaPercent: 1 });
@@ -370,7 +381,20 @@ test('export preserves the index and includes untracked binary data and deletion
     // Ignored build output stays out of the patch, the same as a commit.
     writeFileSync(path.join(work, '.git', 'info', 'exclude'), 'obj/\n');
     mkdirSync(path.join(work, 'obj')); writeFileSync(path.join(work, 'obj', 'out.dll'), 'built');
-    writeFileSync(path.join(root, 'task.json'), JSON.stringify({ workspace: work, box: 'mxc' }));
+    const terms = path.join(root, 'terms'); writeFileSync(terms, 'forbidden-word-alpha\n');
+    writeFileSync(path.join(root, 'task.json'), JSON.stringify({ workspace: work, box: 'mxc',
+      clean_room: {}, forbidden_terms_file: terms }));
+    writeFileSync(path.join(root, 'ledger.jsonl'), JSON.stringify({ clean_room: {
+      terms_file_sha256: hash(readFileSync(terms)) } }) + '\n');
+    writeFileSync(path.join(root, 'result.json'), JSON.stringify({ status: 'failed' }));
+    const denied = path.join(root, 'denied.patch');
+    assert.throws(() => exportPatch(root, denied), /run not completed/);
+    assert.equal(fs.existsSync(denied), false);
+    writeFileSync(path.join(root, 'result.json'), JSON.stringify({ status: 'completed' }));
+    writeFileSync(terms, 'changed-word\n');
+    assert.throws(() => exportPatch(root, denied), /audit failed/);
+    assert.equal(fs.existsSync(denied), false);
+    writeFileSync(terms, 'forbidden-word-alpha\n');
     writeFileSync(path.join(root, 'state.json'), JSON.stringify({ start: { head } }));
     const patch = path.join(root, 'out.patch'); const result = exportPatch(root, patch);
     assert.equal(result.files.length, 3); assert.deepEqual(readFileSync(path.join(work, '.git', 'index')), index);

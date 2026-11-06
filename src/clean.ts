@@ -185,7 +185,7 @@ export async function verifyClean(task: { workspace: string; read_roots: string[
       roots: task.read_roots, commit: manifest.clean_commit });
     if (scanned.hits.length) throw new Error('forbidden term in inspected data');
     return { manifest_sha256: hash(manifestData), terms_file_sha256: hash(terms), head: scanned.head,
-      read_roots: task.read_roots, files: scanned.files, objects: scanned.objects, large: scanned.large };
+      read_roots: task.read_roots, files: scanned.files, objects: scanned.objects };
   } catch (error) {
     const messages = ['box must be mxc', 'host job output must be summary', 'terms file missing',
       'read root missing', 'manifest destination mismatch', '.git is not a directory', 'git alternates present',
@@ -248,6 +248,9 @@ export function audit(dir: string) {
   }
   const verified = rows.find(row => row.clean_room)?.clean_room;
   if (!verified) mismatch.push('clean_room');
+  if (verified && verified.terms_file_sha256 !== hash(readFileSync(task.forbidden_terms_file))) {
+    mismatch.push('terms_file');
+  }
   const result = { ok: !missing.length && !extra.length && !mismatch.length && !forbidden.length,
     missing, extra, mismatch, forbidden, models: [...new Set(requests.map(r => r.model))],
     efforts: [...new Set(requests.map(r => r.effort))],
@@ -258,6 +261,11 @@ export function audit(dir: string) {
 }
 
 export function exportPatch(dir: string, output: string) {
+  let completed = false;
+  try { completed = JSON.parse(readFileSync(path.join(dir, 'result.json'), 'utf8')).status === 'completed'; }
+  catch { /* Missing or invalid result. */ }
+  if (!completed) throw new Error('run not completed');
+  if (!audit(dir).ok) throw new Error('audit failed');
   const task = JSON.parse(readFileSync(path.join(dir, 'task.json'), 'utf8'));
   if (task.box === 'none') throw new Error('box must be mxc');
   const state = JSON.parse(readFileSync(path.join(dir, 'state.json'), 'utf8'));

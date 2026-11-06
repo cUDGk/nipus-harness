@@ -90,8 +90,35 @@ function validateTask(value: unknown): asserts value is Task {
     }
     searchUrl(web);
   }
-  if (Array.isArray(task.questions) && task.questions.some((item: any) => item?.sources !== undefined &&
-    (!Number.isSafeInteger(item.sources) || item.sources < 0))) throw new Error('Invalid sources');
+  const object = (v: any) => v && typeof v === 'object' && !Array.isArray(v);
+  const strings = (v: any) => Array.isArray(v) && v.every(x => typeof x === 'string');
+  const integer = (v: any) => Number.isSafeInteger(v) && v >= 0;
+  const scope = task.scope as any;
+  if (scope !== undefined && (!object(scope) || Object.keys(scope).some(k =>
+    !['allow', 'protected', 'max_added_lines', 'allow_new_deps', 'allow_docs'].includes(k)) ||
+    ['allow', 'protected'].some(k => scope[k] !== undefined && !strings(scope[k])) ||
+    (scope.max_added_lines !== undefined && !integer(scope.max_added_lines)) ||
+    ['allow_new_deps', 'allow_docs'].some(k => scope[k] !== undefined && typeof scope[k] !== 'boolean'))) {
+    throw new Error('Invalid scope');
+  }
+  if (task.roles !== undefined && (!object(task.roles) || Object.entries(task.roles as object).some(([name, r]: any) =>
+    !/^[A-Za-z0-9_-]+$/.test(name) || !object(r) ||
+    Object.keys(r).some(k => !['model', 'effort', 'tools', 'max_quota_percent'].includes(k)) ||
+    typeof r.model !== 'string' || !r.model.trim() || typeof r.effort !== 'string' || !strings(r.tools) ||
+    typeof r.max_quota_percent !== 'number' || !Number.isFinite(r.max_quota_percent) || r.max_quota_percent < 0))) {
+    throw new Error('Invalid role');
+  }
+  if (task.questions !== undefined) {
+    const ids = new Set();
+    if (!Array.isArray(task.questions) || task.questions.some((q: any) => !object(q) ||
+      Object.keys(q).some(k => !['id', 'text', 'refs', 'sources'].includes(k)) ||
+      typeof q.id !== 'string' || !q.id.trim() || ids.has(q.id) || !ids.add(q.id) ||
+      typeof q.text !== 'string' || !q.text.trim() ||
+      ['refs', 'sources'].some(k => q[k] !== undefined && !integer(q[k])))) throw new Error('Invalid questions');
+  }
+  if (task.max_continues !== undefined && !integer(task.max_continues)) throw new Error('Invalid max_continues');
+  if (task.read_roots !== undefined && (!strings(task.read_roots) ||
+    (task.read_roots as string[]).some(p => !path.isAbsolute(p)))) throw new Error('Invalid read_roots');
   if (task.clean_room !== undefined && (!task.clean_room || typeof task.clean_room !== 'object' ||
       Array.isArray(task.clean_room) || Object.keys(task.clean_room).some(k => k !== 'manifest') ||
       typeof (task.clean_room as any).manifest !== 'string' || !path.isAbsolute((task.clean_room as any).manifest))) {
@@ -178,14 +205,19 @@ async function main() {
     if (task.web && task.box === 'none' && !task.web.allow_unboxed) throw new Error('web requires allow_unboxed');
     validateEnvironment({ box: task.box, env: task.env, path: task.path, readRoots: task.read_roots ?? [] });
     let previous: typeof result | undefined;
+    let resumeNote = '';
     if (resuming) {
-      if (process.argv.length !== 4 && (process.argv.length !== 6 || process.argv[4] !== '--max-quota-percent')) {
-        throw new Error('Invalid resume arguments');
-      }
-      if (process.argv.length === 6) {
-        const limit = Number(process.argv[5]);
-        if (!Number.isFinite(limit) || limit < 0) throw new Error('Invalid max_quota_percent');
-        task.max_quota_percent = limit;
+      const options = process.argv.slice(4);
+      if (options.length % 2) throw new Error('Invalid resume arguments');
+      for (let i = 0; i < options.length; i += 2) {
+        if (options[i] === '--max-quota-percent') {
+          const limit = Number(options[i + 1]);
+          if (!Number.isFinite(limit) || limit < 0) throw new Error('Invalid max_quota_percent');
+          task.max_quota_percent = limit;
+        } else if (options[i] === '--message-file') {
+          // The caller's answer to why the run stopped. Without it a worker told its block was invalid hears nothing new.
+          resumeNote = readFileSync(options[i + 1], 'utf8').trim();
+        } else throw new Error('Invalid resume arguments');
       }
       const resultFile = path.join(runDir, 'result.json');
       if (existsSync(resultFile)) {
@@ -359,8 +391,10 @@ async function main() {
         .filter(check => !previous?.checks?.some(item => item.id === check.id && item.status === 'passed'))
         .map(check => check.id), ...(task.questions ?? []).map(question => question.id)].join(', ') || 'なし';
       // A CLI stopped before its first reply was saved leaves an empty conversation, so that resume sends the goal.
+      const note = resumeNote ? `\n${resumeNote}` : '';
       const message = resuming && session.messages.length
-        ? `前回 status が ${previous?.status ?? 'interrupted'} で止まった。残っている条件は ${remaining}` : undefined;
+        ? `前回 status が ${previous?.status ?? 'interrupted'} で止まった。残っている条件は ${remaining}${note}` : undefined;
+      if (!message) task.goal += note;
       await runLoop(session, task, activeDir, result, () => finish, () => { finish = undefined; },
         start.repository ? start.head : null, restore.flush, () => { if (gateError) throw gateError; }, message);
     } finally { session.dispose(); }
@@ -384,6 +418,7 @@ async function main() {
     }
     if (workspaceLock) removeLock(workspaceLock);
     process.stdout.write(JSON.stringify(result) + '\n');
+    if (result.status !== 'completed') process.exitCode = 1;
   }
 }
 try {
@@ -409,17 +444,22 @@ try {
   else if (process.argv[2] === 'clean-copy') {
     try {
       if (process.argv.length !== 4) throw new Error('Invalid clean-copy arguments');
-      process.stdout.write(JSON.stringify(cleanCopy(process.argv[3])) + '\n');
+      const result = cleanCopy(process.argv[3]);
+      process.stdout.write(JSON.stringify(result) + '\n');
+      if ('status' in result && result.status === 'quarantined') process.exitCode = 1;
     } catch (error) {
       const reason = error instanceof CleanFailure ? error.message : 'clean-copy failed';
       process.stdout.write(JSON.stringify({ status: 'failed', reason }) + '\n');
+      process.exitCode = 1;
     }
   }
   else if (process.argv[2] === 'audit' || process.argv[2] === 'export') {
     const isAudit = process.argv[2] === 'audit';
     if (process.argv.length !== (isAudit ? 4 : 5)) throw new Error('Invalid arguments');
-    process.stdout.write(JSON.stringify(isAudit ? audit(path.resolve(process.argv[3])) :
-      exportPatch(path.resolve(process.argv[3]), path.resolve(process.argv[4]))) + '\n');
+    const result = isAudit ? audit(path.resolve(process.argv[3])) :
+      exportPatch(path.resolve(process.argv[3]), path.resolve(process.argv[4]));
+    process.stdout.write(JSON.stringify(result) + '\n');
+    if ('ok' in result && !result.ok) process.exitCode = 1;
   }
   else if (!command(process.argv.slice(2))) await main();
 } catch (error) { process.stderr.write((error instanceof Error ? error.message : String(error)) + '\n');

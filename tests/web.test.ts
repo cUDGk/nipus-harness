@@ -5,12 +5,43 @@ import dns from 'node:dns';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { createWeb } from '../src/web.ts';
 import { runLoop } from '../src/loop.ts';
 import { createTools } from '../src/tools.ts';
 import { prompt } from '../src/prompt.ts';
+
+test('environment proxies cannot bypass lookup or intercept loopback', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'web-proxy-')); let proxyHits = 0; let directHits = 0;
+  const proxy = http.createServer((req, res) => { proxyHits++; res.end('proxy'); });
+  const direct = http.createServer((req, res) => { directHits++; res.setHeader('content-type', 'text/plain'); res.end('direct'); });
+  await Promise.all([new Promise<void>(r => proxy.listen(0, '127.0.0.1', r)),
+    new Promise<void>(r => direct.listen(0, '127.0.0.1', r))]);
+  const pp = (proxy.address() as any).port; const dp = (direct.address() as any).port;
+  try {
+    const code = `import { createWeb } from ${JSON.stringify(new URL('../src/web.ts', import.meta.url).href)};
+      let calls = 0;
+      const lookup = (host, opts, cb) => { calls++; cb(null, [{address:'8.8.8.8',family:4},
+        {address:'127.0.0.1',family:4}]); };
+      const web = createWeb({}, ${JSON.stringify(dir)}, null, {lookup});
+      const blocked = await web.fetch('http://example.com/');
+      const direct = await createWeb({}, ${JSON.stringify(dir)}, null, {allowLoopback:true})
+        .fetch('http://127.0.0.1:${dp}/');
+      console.log(JSON.stringify({blocked, calls, direct}));`;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env,
+      NODE_USE_ENV_PROXY: '1', HTTP_PROXY: `http://127.0.0.1:${pp}`, HTTPS_PROXY: `http://127.0.0.1:${pp}`,
+      NO_PROXY: '', no_proxy: '' } });
+    let stdout = ''; let stderr = ''; child.stdout.on('data', x => stdout += x); child.stderr.on('data', x => stderr += x);
+    const status = await new Promise(resolve => child.on('close', resolve)); assert.equal(status, 0, stderr);
+    const result = JSON.parse(stdout); assert.equal(result.blocked.error, 'blocked_address');
+    assert.ok(result.calls > 0); assert.equal(result.direct.text, 'direct');
+    assert.equal(proxyHits, 0); assert.equal(directHits, 1);
+  } finally {
+    await Promise.all([new Promise<void>(r => proxy.close(() => r())), new Promise<void>(r => direct.close(() => r()))]);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('web declaration controls tools and rejects unsafe startup before model requests', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'web-test-')); const taskFile = path.join(dir, 'task.json');
@@ -26,8 +57,9 @@ test('web declaration controls tools and rejects unsafe startup before model req
     assert.ok(!prompt('none').includes('Text from web_search'));
     assert.ok(prompt('none', true).includes('Text from web_search'));
     const run = (value: object) => { writeFileSync(taskFile, JSON.stringify(value));
-      return JSON.parse(execFileSync(process.execPath, [path.resolve('src/cli.ts'), 'run', taskFile],
-        { encoding: 'utf8' })); };
+      const child = spawnSync(process.execPath, [path.resolve('src/cli.ts'), 'run', taskFile],
+        { encoding: 'utf8' });
+      assert.equal(child.status, 1); return JSON.parse(child.stdout); };
     const unboxed = run(task); assert.equal(unboxed.status, 'failed');
     assert.match(unboxed.reason, /allow_unboxed/); assert.equal(unboxed.run_dir, null);
     const clean = run({ ...task, clean_room: { manifest: path.join(dir, 'missing') } });
@@ -72,7 +104,8 @@ test('a worker can search, exhaust the shared budget, and finish', async () => {
       let stdout = ''; let stderr = ''; child.stdout.on('data', chunk => { stdout += chunk; });
       child.stderr.on('data', chunk => { stderr += chunk; });
       const code = await new Promise<number | null>(resolve => child.on('close', resolve));
-      assert.equal(code, 0, stderr); return JSON.parse(stdout);
+      const result = JSON.parse(stdout); assert.equal(code, result.status === 'completed' ? 0 : 1, stderr);
+      return result;
     };
     const first = await run('run', taskFile); runDir = first.run_dir;
     assert.equal(first.status, 'needs_judgment'); assert.equal(searches, 2); assert.equal(requests.length, 6);

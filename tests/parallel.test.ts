@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync,
   writeFileSync } from 'node:fs';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,8 +16,8 @@ test('an unreadable state returns a failed result and a reason', async () => {
     writeFileSync(path.join(run, 'task.json'), JSON.stringify({ id: 'bad-state', goal: 'test', workspace,
       model: 'gpt-6.1-terra', effort: 'medium' }));
     writeFileSync(path.join(run, 'state.json'), '{');
-    const output = execFileSync(process.execPath, [path.resolve('src/cli.ts'), 'resume', run], { encoding: 'utf8' });
-    const result = JSON.parse(output);
+    const child = spawnSync(process.execPath, [path.resolve('src/cli.ts'), 'resume', run], { encoding: 'utf8' });
+    assert.equal(child.status, 1); const result = JSON.parse(child.stdout);
     assert.equal(result.status, 'failed'); assert.match(result.reason, /JSON|position|end/i);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -232,8 +232,9 @@ test('subscription failures stop or retry according to their code', { timeout: 9
         HARNESS_AGENT_DIR: agent, HARNESS_TEST_API_KEY: 'fake', HARNESS_QUOTA_COMMAND: '', HARNESS_RETRY_BASE_MS: '50'
       } });
       let stdout = ''; let stderr = ''; child.stdout.on('data', c => stdout += c); child.stderr.on('data', c => stderr += c);
-      assert.equal(await new Promise(resolve => child.on('close', resolve)), 0, stderr);
-      const result = JSON.parse(stdout); if (result.run_dir) dirs.push(result.run_dir);
+      const code = await new Promise(resolve => child.on('close', resolve));
+      const result = JSON.parse(stdout); assert.equal(code, result.status === 'completed' ? 0 : 1, stderr);
+      if (result.run_dir) dirs.push(result.run_dir);
       assert.equal(requests, cases[index][0] === 503 ? 2 : 1, JSON.stringify(result));
       if (cases[index][0] === 503) assert.ok(times[1] - times[0] >= 45, JSON.stringify(times));
       if (index === 0 || cases[index][0] === 200) {

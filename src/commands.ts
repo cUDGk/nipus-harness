@@ -128,7 +128,7 @@ const help = `Usage: node src/cli.ts <command> [arguments]
   clean-copy <declaration.json>
   audit <run_dir>
   export <run_dir> <out.patch>
-  resume <run_dir> [--max-quota-percent <number>]
+  resume <run_dir> [--max-quota-percent <number>] [--message-file <path>]
   status [run_dir ...] | status --active
   stop <run_dir>
   login
@@ -144,6 +144,12 @@ Task: id, goal, workspace, model, effort, read_roots, forbidden_terms_file,
   host_jobs: named commands with args patterns, timeout_s, lock or unity_project,
     output (tail or summary), and summary_file for summary output.
   acceptance: command/timeout_s, or host_job/args for a declared job.
+  A command's last instruction decides its result; put separate checks in separate acceptance items.
+  max_run_s limits one worker command (default 3600 seconds), not the whole run.
+  Quota is counted after each response, so the last request may exceed max_quota_percent.
+  Role quotas apply per delegation; the task quota limits the whole run.
+  run and resume print JSON and exit 0 only for completed, otherwise 1.
+  export requires a completed run that passes a fresh audit.
 `;
 
 export function command(args: string[]): boolean {

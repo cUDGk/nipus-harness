@@ -11,6 +11,22 @@ import { createHash } from 'node:crypto';
 import { reap } from '../src/commands.ts';
 import { createTools } from '../src/tools.ts';
 
+test('host summary cannot escape the run directory through a placeholder', async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'host-summary-'));
+  const workspace = path.join(root, 'work'); const run = path.join(root, 'run'); mkdirSync(workspace); mkdirSync(run);
+  try {
+    execFileSync('git', ['init', '-q', workspace]);
+    execFileSync('git', ['-C', workspace, '-c', 'user.name=test', '-c', 'user.email=test@localhost',
+      'commit', '--allow-empty', '-qm', 'init']);
+    writeFileSync(path.join(root, 'secret.json'), JSON.stringify({ secret: 'private' }));
+    const task: HostTask = { workspace, box: 'none', host_jobs: { check: {
+      command: [process.execPath, '-e', ''], args: { name: '.*' }, timeout_s: 30,
+      lock: `summary-${process.pid}`, output: 'summary', summary_file: '{run_dir}\\\\..\\\\{name}.json' } } };
+    const result = await hostJob(task, run, 'check', { name: 'secret' });
+    assert.deepEqual(result.summary, { error: 'unreadable' });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('direct execution reads outside the box and filters inherited secrets', { timeout: 60000 }, async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'host-direct-'));
   const workspace = path.join(root, 'work'); const scratch = path.join(root, 'scratch');

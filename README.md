@@ -38,7 +38,7 @@ Sign in with ChatGPT の、[オープンソースと手元で動かすアプリ�
 | 小さな固定部分 | 作業役の道具は `inspect`・`run`・`edit`・`finish` が基本で、指示は短い固定の文だけ |
 | 受入 | `acceptance` のコマンドが通るまで自動で続ける。`specs` と `questions` で、節ごとに証拠の場所を求められる |
 | 箱 | 既定の `box: "mxc"` では、読めるのは `workspace` と `read_roots` だけで、ネットにも出られない。Unity などを動かす時は `"none"` で外す |
-| 枠の上限 | `max_quota_percent` が 1 回の実行の上限。週の枠が 99% になると自動で止まる |
+| 枠の上限 | `max_quota_percent` が実行全体の上限。応答の後に数えて次の要求を止めるので、最後の 1 回分だけ超える事がある。`roles` の `max_quota_percent` は委譲 1 回ごとの上限。週の枠が 99% になると自動で止まる |
 | 送信の検査 | 送るモデルと道具を実行の設定と照らし、許可した相手にだけ送る。呼び出しごとの量を `ledger.jsonl` に記録する |
 | 差分の規則 | `scope` の範囲外の変更、新しい文書や依存、`@ts-ignore`、残った TODO を不合格にする |
 | 子の作業役 | `roles` で親と別のモデルと上限を決められる |
@@ -47,7 +47,7 @@ Sign in with ChatGPT の、[オープンソースと手元で動かすアプリ�
 | クリーンルーム | `clean-copy`→`run`→`audit`→`export` で、許した物だけを写した場所で作らせ、差分だけを持ち出す |
 | MCP | `mcp` に書いたサーバーの、書いた道具だけを作業役に見せる |
 | 高速モード | `service_tier` に `"priority"` と書いた時だけ使う |
-| 止めて再開 | `status`・`stop`・`resume`。PC が止まっても続きから再開できる |
+| 止めて再開 | `status`・`stop`・`resume`。PC が止まっても続きから再開できる。`run` と `resume` は JSON を出し、終了コードは `completed` なら 0、それ以外は 1 |
 
 ## 処理フロー
 
@@ -120,8 +120,8 @@ bin\harness.cmd run task.json
 |---|---|
 | `id`・`goal`・`workspace` | 必須。`id` は英数字と `-`・`_`、`workspace` は絶対パス |
 | `model`・`effort` | 必須。一覧に無い新しい `gpt-` の名前も書けます。その時は枠を一番重く数えます |
-| `acceptance` | 受入のコマンド、または `host_jobs` の名前 |
-| `max_quota_percent`・`max_continues`・`max_run_s` | 枠の上限、続ける回数、時間の上限 |
+| `acceptance` | 受入のコマンド、または `host_jobs` の名前。コマンドの結果は最後の命令で決まるので、検査は項目を分ける |
+| `max_quota_percent`・`max_continues`・`max_run_s` | 枠の上限、続ける回数、作業役の命令 1 回の時間の上限 (既定 3600 秒。全体の時間の上限ではない) |
 | `specs`・`questions` | 仕様の節ごとの確認、答えと根拠の要求 |
 | `scope` | `allow`・`protected`・`allow_docs`・`allow_new_deps`・`max_added_lines` |
 | `box`・`read_roots`・`env`・`path` | 箱の有無、読める場所、環境変数、道具のフォルダ |
@@ -140,8 +140,8 @@ bin\harness.cmd run task.json
 | `mcp-tools <task.json>` | MCP の道具の名前を一覧にする |
 | `status [run_dir ...]`・`status --active` | 状態を見る |
 | `stop <run_dir>` | 止める |
-| `resume <run_dir> [--max-quota-percent <数>]` | 続きから再開する |
-| `clean-copy <宣言.json>`・`audit <run_dir>`・`export <run_dir> <out.patch>` | クリーンルームの手順 |
+| `resume <run_dir> [--max-quota-percent <数>] [--message-file <ファイル>]` | 続きから再開する。ファイルの文は作業役への返事として送る |
+| `clean-copy <宣言.json>`・`audit <run_dir>`・`export <run_dir> <out.patch>` | クリーンルームの手順。`export` は、完了して監査にも通った実行だけを持ち出す |
 | `login`・`help` | ログインと、使い方の表示 |
 
 ### この PC の設定

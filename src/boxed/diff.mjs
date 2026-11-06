@@ -8,7 +8,8 @@ const gitFile = onPath('git');
 const git = (...args) => {
   try { return execFileSync(gitFile, ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=NUL', '-c',
     'diff.external=', '-c', 'core.quotepath=false', ...args], { encoding: 'utf8', env: { ...process.env,
-    GIT_CONFIG_GLOBAL: 'NUL', GIT_LITERAL_PATHSPECS: '1' }, maxBuffer: 64 * 1024 * 1024,
+    // The list of ignored files can pass 64 MB: 800 thousand copied test files made it 82 MB, and the run failed.
+    GIT_CONFIG_GLOBAL: 'NUL', GIT_LITERAL_PATHSPECS: '1' }, maxBuffer: 1024 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'] }); }
   catch (error) { if (error.stderr) error.message = String(error.stderr); throw error; }
   };

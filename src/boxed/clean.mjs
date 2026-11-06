@@ -11,7 +11,7 @@ const gitFile = onPath('git');
 const git = (...args) => execFileSync(gitFile, ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=NUL', ...args],
   { env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: 'NUL', GIT_NO_REPLACE_OBJECTS: '1' },
     maxBuffer: 1024 * 1024 * 1024, windowsHide: true });
-const result = { head: '', files: 0, objects: 0, large: [], hits: [] };
+const result = { head: '', files: 0, objects: 0, hits: [] };
 const scan = (name, bytes) => {
   if (scanText(name, terms).length || (bytes && scanBytes(bytes, terms).length)) result.hits.push(name);
 };
@@ -26,8 +26,7 @@ const walk = (root, name = '', workspace = false) => {
     }
   } else if (stat.isFile()) {
     result.files++;
-    if (stat.size > 64 * 1024 * 1024 && config.mode !== 'diff') { result.large.push(full); scan(full); }
-    else scan(full, readFileSync(full));
+    scan(full, readFileSync(full));
   } else throw new Error('Unsupported file in scan');
 };
 try {

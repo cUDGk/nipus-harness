@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import path from 'node:path';
 import os from 'node:os';
@@ -216,8 +216,8 @@ test('service_tier takes only the two known values', () => {
     for (const service_tier of ['fast', 'flex', 1, null]) {
       const file = path.join(root, 'task.json');
       writeFileSync(file, JSON.stringify({ id: 'tier', goal: 'test', workspace: work, model: 'gpt-6.1-terra', effort: 'medium', service_tier }));
-      const out = execFileSync(process.execPath, [path.resolve('src/cli.ts'), 'run', file], { encoding: 'utf8' });
-      assert.equal(JSON.parse(out).reason, 'Invalid service_tier');
+      const child = spawnSync(process.execPath, [path.resolve('src/cli.ts'), 'run', file], { encoding: 'utf8' });
+      assert.equal(child.status, 1); assert.equal(JSON.parse(child.stdout).reason, 'Invalid service_tier');
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

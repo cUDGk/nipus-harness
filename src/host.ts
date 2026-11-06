@@ -232,7 +232,7 @@ export async function hostJob(task: HostTask, runDir: string, id: string, args: 
         // Under the workspace or the box's scratch the worker can swap a folder for a junction to files outside.
         const root = [task.workspace, runDir].find(item => path.resolve(summaryFile!).toLowerCase()
           .startsWith(path.resolve(item).toLowerCase() + path.sep));
-        if (root && !staysInside(root, summaryFile!)) throw new Error('outside');
+        if (!root || !staysInside(root, summaryFile!)) throw new Error('outside');
         result.summary = statSync(summaryFile!).size > 16384 ? { error: 'too_large' } :
           JSON.parse(readFileSync(summaryFile!, 'utf8'));
       } catch { result.summary = { error: 'unreadable' }; }

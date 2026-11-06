@@ -1,7 +1,7 @@
 ﻿import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import http from 'node:http';
 import path from 'node:path';
 import os from 'node:os';
@@ -96,7 +96,10 @@ test('task validation and mcp-tools', () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'mcp-validation-')); const work = path.join(root, 'work'); mkdirSync(work);
   const base: any = { id: 'mcp-validation', goal: 'test', workspace: work, model: 'gpt-6.1-terra', effort: 'medium', box: 'none', read_roots: [], mcp: { fake: { command: [process.execPath, script], tools: ['not-present'] } } };
   const file = path.join(root, 'task.json');
-  const run = (task: any, command = 'run') => { writeFileSync(file, JSON.stringify(task)); return execFileSync(process.execPath, [path.resolve('src/cli.ts'), command, file], { encoding: 'utf8', env: { ...process.env, HARNESS_QUOTA_COMMAND: '' } }); };
+  const run = (task: any, command = 'run') => { writeFileSync(file, JSON.stringify(task));
+    const child = spawnSync(process.execPath, [path.resolve('src/cli.ts'), command, file],
+      { encoding: 'utf8', env: { ...process.env, HARNESS_QUOTA_COMMAND: '' } });
+    assert.equal(child.status, command === 'run' ? 1 : 0); return child.stdout; };
   try {
     assert.match(run(base, 'mcp-tools'), /"tool":"echo"/);
     for (const mcp of [{ fake: { command: [process.execPath], tools: [] } }, { fake: { command: [process.execPath], tools: ['a', 'a'] } }, { fake: { command: [process.execPath], tools: ['x'.repeat(60)] } }, { fake: { command: [process.execPath], tools: ['a'], bad: true } }]) assert.equal(JSON.parse(run({ ...base, mcp })).reason, 'Invalid mcp');
